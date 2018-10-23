@@ -24,7 +24,7 @@ class TabularIntgralField(TextField):
     def db_value(self, value):
         return ''.join(map(TabularIntgralField.__listToLineStr, value))
     def python_value(self, value):
-        if value == '': return []
+        if value == '' or value is None: return []
         try:
             return list(map(TabularIntgralField.__lineToIntList,
                             value.strip().split('\n')))

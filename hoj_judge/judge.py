@@ -122,6 +122,8 @@ def judgeSingleSubtask(task, paths):
         # check if the process ends with error
         # TODO: RF, OLE
         verdict = None
+        process_failed = (subp_task.returncode != 0)
+
         if log_dict['cgroup_memory_failcnt'] != '0':
             verdict = HojVerdict.MLE
         elif int(log_dict['time']) > task.time_limit:
@@ -129,12 +131,14 @@ def judgeSingleSubtask(task, paths):
         elif subp_task.returncode != 0:
             verdict =  HojVerdict.RE
 
+        if process_failed:
+            print('Subtask {} after {:.0f}ms'.format(color('failed', fg='yellow'), time_task * 1000))
+        else:
+            print('Subtask {} after {:.0f}ms'.format('finished', time_task * 1000))
+
         if verdict is not None:
-            print('Subtask failed after {:.0f}ms'.format(time_task * 1000))
             print(color('===== {:3} ====='.format(verdict.name), fg='magenta', style='negative'))
             return verdict, log_dict
-
-        print('Subtask finished after {:.0f}ms'.format(time_task * 1000))
 
         f_out_user.seek(0)
 
@@ -312,12 +316,14 @@ if __name__ == '__main__':
     if submission.submission_status != 0:
         print('Submission is already judged, skip updating.')
     else:
-        query_update = submission.update(
+        submission.__data__.update(
             submission_status=the_verdict.value,
             submission_score=the_score,
             submission_mem=the_mem,
             submission_time=the_time,
-            submission_result=the_result
+            submission_result=the_result,
+            submission_len=len(submission.submission_code)
         )
-        query_update.execute()
+        submission.save()
+
         print('Updated submission in database.')
