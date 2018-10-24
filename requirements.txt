@@ -1,3 +1,2 @@
 peewee
-pwiz
-ansicolor
+ansicolors
