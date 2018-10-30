@@ -207,6 +207,7 @@ def judgeSubmission(submission, judge_desc):
 
     testdata_iter = iter(_testdata)
     judge_results = []
+    pretest_fail = False
 
     for task in samples:
         print(color('Judging sample:', fg='blue', style='bold'), task)
@@ -218,7 +219,15 @@ def judgeSubmission(submission, judge_desc):
             int(info.get('cgroup_memory_max_usage', -1))
         ])
 
+        if verdict == HojVerdict.SERR:
+            pretest_fail = True
+
     print()
+
+    if pretest_fail:
+        print('Error occurred when running samples -- halting')
+        results = judge_results + [[HojVerdict.OTHER, -1, -1] for _ in subtasks]
+        return results, 0
 
     print(color('--- Real judging tasks', style='bold'))
 

@@ -46,7 +46,7 @@ class HojVerdict(Enum):
     def toPriority(self):
         # SYSERR > Restricted > OTHER > CE > RE > OLE > TLE > MLE > PE > WA > AC
         # in reverse order (increasing priority)
-        order = [0, 1, 6, 7, 5, 4, 8, 2, 3, 9, 11, 10]
+        order = [1, 6, 7, 5, 4, 8, 2, 3, 9, 11, 10, 0]
         return order.index(self.value)
 
 
