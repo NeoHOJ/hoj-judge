@@ -12,7 +12,7 @@ A bridge to operate on managing submissions in HOJ DB.
 '''
 
 config = toml.load(path.join(path.dirname(__file__), '../config/config.toml'))
-hoj_database = MySQLDatabase('judge', **config['database'])
+hoj_database = MySQLDatabase(**config['database'])
 
 class HojTaskDef(TaskDef):
     def __init__(self,
