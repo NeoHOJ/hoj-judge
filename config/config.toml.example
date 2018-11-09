@@ -1,0 +1,8 @@
+[database]
+charset = 'utf8'
+use_unicode = true
+host = 'localhost'
+port = 3306
+user = 'test'
+database = 'hoj_judge'
+password = 'test'

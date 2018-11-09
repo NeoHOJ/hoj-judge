@@ -1,17 +1,18 @@
 from enum import Enum
 from os import path
 
+import toml
 from colors import color
-
-from datatypes import TaskDef, TaskSpec
 from peewee import *
-import settings
+
+from .datatypes import TaskDef, TaskSpec
 
 '''
 A bridge to operate on managing submissions in HOJ DB.
 '''
 
-hoj_database = MySQLDatabase('judge', **settings.DB_CONFIG)
+config = toml.load(path.join(path.dirname(__file__), '../config/config.toml'))
+hoj_database = MySQLDatabase('judge', **config['database'])
 
 class HojTaskDef(TaskDef):
     def __init__(self,

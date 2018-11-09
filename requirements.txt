@@ -1,3 +1,4 @@
 peewee
 PyMySQL
 ansicolors
+toml
