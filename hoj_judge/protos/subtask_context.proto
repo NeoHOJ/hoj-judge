@@ -1,0 +1,12 @@
+syntax = 'proto3';
+
+import 'hoj_judge/protos/subtask.proto';
+
+message SubtaskContext {
+  uint32 task_group_num = 1;
+  uint32 subtask_num = 2;
+  Subtask subtask = 3;
+  uint32 group_score_max = 4;
+
+  map<string, string> log_dict = 5;
+}

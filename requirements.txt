@@ -1,4 +1,5 @@
-peewee
+peewee == 3.7.*
 PyMySQL
 ansicolors
 toml
+protobuf >= 3.6

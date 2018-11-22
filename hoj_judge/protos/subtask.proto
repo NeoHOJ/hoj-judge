@@ -1,0 +1,11 @@
+syntax = 'proto3';
+
+message Subtask {
+  uint32 time_limit = 1;
+  uint32 mem_limit = 2;
+  string input_path = 3;
+  string output_path = 4;
+  string output_user_path = 5;
+
+  uint32 score_max = 6;
+}
