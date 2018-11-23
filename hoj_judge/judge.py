@@ -10,13 +10,14 @@ import time
 from peewee import *
 from colors import color
 
+from google.protobuf.wrappers_pb2 import Int64Value
 import hoj_judge.models_hoj as m
+from . import protos
 from ._hoj_helpers import *
-from .utils import tolerantDiffAt
 
 
 SANDBOX_PATH = '/run/shm/judge'
-TESTDATA_PATH = path.relpath(path.join(path.dirname(__file__), '..', 'testdata'))
+TESTDATA_PATH = path.relpath(path.join(__package__, '..', 'testdata'))
 TMP_RUNLOG_PATH = '/run/shm/sandbox.log'
 TMP_USEROUT_PATH = '/tmp/test'
 TMP_COMPLOG_PATH = '/run/shm/compile.log'
@@ -118,6 +119,9 @@ def judgeSingleSubtask(task, paths):
                     ' Cannot find key "{}" from log'.format(k))
                 return HojVerdict.SERR, log_dict
 
+        time_used = int(log_dict['time'])
+        mem_used = int(log_dict['cgroup_memory_max_usage'])
+
         # check if the process ends with error
         # TODO: RF, OLE
         verdict = None
@@ -125,7 +129,7 @@ def judgeSingleSubtask(task, paths):
 
         if log_dict['cgroup_memory_failcnt'] != '0':
             verdict = HojVerdict.MLE
-        elif int(log_dict['time']) > task.time_limit:
+        elif time_used > task.time_limit:
             verdict =  HojVerdict.TLE
         elif subp_task.returncode != 0:
             verdict =  HojVerdict.RE
@@ -139,19 +143,45 @@ def judgeSingleSubtask(task, paths):
             print(color('===== {:3} ====='.format(verdict.name), fg='magenta', style='negative'))
             return verdict, log_dict
 
-        f_out_user.seek(0)
+    # judge by reading the file's content
+    # TODO: special judge; should accept score and return judged score
 
-        # judge by reading the file's content
-        # TODO: special judge; should accept score and return judged score
-        with open(outfile, 'r') as f_out:
-            lineno = tolerantDiffAt(f_out_user, f_out)
-            if lineno > 0:
-                print(color('===== WA  =====', fg='red', style='negative') +
-                      '  @ line {}'.format(lineno))
-                return HojVerdict.WA, log_dict
+    cxt = protos.subtask_context_pb2.SubtaskContext(
+        subtask={
+            'time_limit': task.time_limit,
+            'mem_limit': task.mem_limit,
+            'input_path': '__placeholder__',
+            'output_path': outfile,
+            'output_user_path': TMP_USEROUT_PATH,
+        },
+        stat={
+            'time_used': time_used,
+            'mem_used': mem_used,
+        },
+        log_dict=log_dict,
+    )
 
-        print(color('===== AC  =====', fg='green', style='negative'))
-        return HojVerdict.AC, log_dict
+    subp_checker = subprocess.run(
+        path.join(__package__, '..', 'utils', 'tolerant_diff.py'),
+        input=cxt.SerializeToString(),
+        stdout=subprocess.PIPE
+    )
+    resp = protos.subtask_response_pb2.SubtaskResponse()
+    resp.ParseFromString(subp_checker.stdout)
+
+    # alternative way for a Python file; faster
+    # tolerantDiff = runpy.run_path(utility_path)
+    # resp = tolerantDiff['main'](cxt)
+
+    if resp.verdict != HojVerdict.AC.value:
+        lineno_wrap = Int64Value()
+        resp.meta['lineno'].Unpack(lineno_wrap)
+        print(color('===== WA  =====', fg='red', style='negative') +
+              '  @ line {}'.format(lineno_wrap.value))
+        return HojVerdict.WA, log_dict
+
+    print(color('===== AC  =====', fg='green', style='negative'))
+    return HojVerdict.AC, log_dict
 
 def judgeSubmission(submission, judge_desc):
     problem = submission.problem

@@ -9,3 +9,8 @@ message Subtask {
 
   uint32 score_max = 6;
 }
+
+message SubtaskStat {
+  uint32 time_used = 1;
+  uint32 mem_used = 2;
+}

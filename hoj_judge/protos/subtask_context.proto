@@ -8,5 +8,6 @@ message SubtaskContext {
   Subtask subtask = 3;
   uint32 group_score_max = 4;
 
-  map<string, string> log_dict = 5;
+  SubtaskStat stat = 5;
+  map<string, string> log_dict = 6;
 }
