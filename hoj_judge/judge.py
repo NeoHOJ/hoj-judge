@@ -69,79 +69,79 @@ def judgeSingleSubtask(task, paths):
         exec=PROG_EXEC_PATH
     )
 
-    # infile can be closed as soon as the subtask is done
-    # but to take advantage of early-returns, outfile is managed in a `with`
     f_in = open(infile, 'r')
+    f_out_user = open(TMP_USEROUT_PATH, 'w+')
 
-    with open(TMP_USEROUT_PATH, 'w+') as f_out_user:
-        time_task = time.perf_counter()
 
-        subp_task = subprocess.run(
-            shlex.split(cmd_task),
-            cwd=path.dirname(__file__),
-            stdin=f_in,
-            stdout=f_out_user,
-            pass_fds=(log_file_fd,)
-        )
+    time_task = time.perf_counter()
 
-        time_task = time.perf_counter() - time_task
+    subp_task = subprocess.run(
+        shlex.split(cmd_task),
+        cwd=path.dirname(__file__),
+        stdin=f_in,
+        stdout=f_out_user,
+        pass_fds=(log_file_fd,)
+    )
 
-        f_in.close()
+    time_task = time.perf_counter() - time_task
 
-        # parse output and filter out the STATs key-value pair
+    f_in.close()
+    f_out_user.close()
 
-        # get size of the log
-        # TODO: interrupt if the log file is empty. the worker probably fails to start up
-        log_file.seek(0, 2)
-        sz = log_file.tell()
+    # parse output and filter out the STATs key-value pair
 
-        log_file.seek(0)
-        log_dict = {}
-        for ln in log_file:
-            mat = re.match(r'\[S\]\[\d+?\] __STAT__:0 (?:\d+?:)?([\w]+)\s+=\s+(.*)', ln)
-            if mat is None:
-                print('>>> {}'.format(ln), end='')
-                continue
-            log_dict[mat.group(1)] = mat.group(2)
-        log_file.close()
+    # get size of the log
+    # TODO: interrupt if the log file is empty. the worker probably fails to start up
+    log_file.seek(0, 2)
+    sz = log_file.tell()
 
-        print(log_dict)
+    log_file.seek(0)
+    log_dict = {}
+    for ln in log_file:
+        mat = re.match(r'\[S\]\[\d+?\] __STAT__:0 (?:\d+?:)?([\w]+)\s+=\s+(.*)', ln)
+        if mat is None:
+            # print('>>> {}'.format(ln), end='')
+            continue
+        log_dict[mat.group(1)] = mat.group(2)
+    log_file.close()
 
-        log_used_keys = [
-            'cgroup_memory_failcnt',
-            'cgroup_memory_max_usage',
-            'time'
-        ]
+    print(log_dict)
 
-        for k in log_used_keys:
-            if k not in log_dict:
-                print(color('===== SER =====', fg='white', style='negative') +
-                    ' Cannot find key "{}" from log'.format(k))
-                return HojVerdict.SERR, log_dict
+    log_used_keys = [
+        'cgroup_memory_failcnt',
+        'cgroup_memory_max_usage',
+        'time'
+    ]
 
-        time_used = int(log_dict['time'])
-        mem_used = int(log_dict['cgroup_memory_max_usage'])
+    for k in log_used_keys:
+        if k not in log_dict:
+            print(color('===== SER =====', fg='white', style='negative') +
+                ' Cannot find key "{}" from log'.format(k))
+            return HojVerdict.SERR, log_dict
 
-        # check if the process ends with error
-        # TODO: RF, OLE
-        verdict = None
-        process_failed = (subp_task.returncode != 0)
+    time_used = int(log_dict['time'])
+    mem_used = int(log_dict['cgroup_memory_max_usage'])
 
-        if log_dict['cgroup_memory_failcnt'] != '0':
-            verdict = HojVerdict.MLE
-        elif time_used > task.time_limit:
-            verdict =  HojVerdict.TLE
-        elif subp_task.returncode != 0:
-            verdict =  HojVerdict.RE
+    # check if the process ends with error
+    # TODO: RF, OLE
+    verdict = None
+    process_failed = (subp_task.returncode != 0)
 
-        if process_failed:
-            print('Subtask {} after {:.0f}ms'.format(color('failed', fg='yellow'), time_task * 1000))
-        else:
-            print('Subtask {} after {:.0f}ms'.format('finished', time_task * 1000))
+    if log_dict['cgroup_memory_failcnt'] != '0':
+        verdict = HojVerdict.MLE
+    elif time_used > task.time_limit:
+        verdict =  HojVerdict.TLE
+    elif subp_task.returncode != 0:
+        verdict =  HojVerdict.RE
 
-        if verdict is not None:
-            print(color('===== {:3} ====='.format(verdict.name), fg='magenta', style='negative'))
-            return verdict, log_dict
+    if process_failed:
+        print('Subtask {} after {:.0f}ms'.format(color('failed', fg='yellow'), time_task * 1000))
+    else:
+        print('Subtask {} after {:.0f}ms'.format('finished', time_task * 1000))
+
+    if verdict is not None:
+        print(color('===== {:3} ====='.format(verdict.name), fg='magenta', style='negative'))
+        return verdict, log_dict
 
     # judge by reading the file's content
     # TODO: special judge; should accept score and return judged score
