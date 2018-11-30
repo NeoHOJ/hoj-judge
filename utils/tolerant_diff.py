@@ -41,10 +41,13 @@ def main(cxt):
     pathOut = cxt.subtask.output_path
     pathOut_user = cxt.subtask.output_user_path
 
-    with open(pathOut_user, 'r') as fOut_user:
-        with open(pathOut, 'r') as fOut:
-            diffResult = tolerantDiffAt(fOut_user, fOut)
-            logger.info('diff result: {}'.format(diffResult))
+    fOut_user = open(pathOut_user, 'r')
+    fOut = open(pathOut, 'r')
+    diffResult = tolerantDiffAt(fOut_user, fOut)
+    fOut_user.close()
+    fOut.close()
+
+    logger.info('diff result: {}'.format(diffResult))
 
     resp = subtask_response_pb2.SubtaskResponse()
     resp.meta['lineno'].Pack(Int64Value(value=diffResult + 1))

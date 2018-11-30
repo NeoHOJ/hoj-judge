@@ -150,7 +150,7 @@ def judgeSingleSubtask(task, paths):
         subtask={
             'time_limit': task.time_limit,
             'mem_limit': task.mem_limit,
-            'input_path': '__placeholder__',
+            'input_path': infile,
             'output_path': outfile,
             'output_user_path': TMP_USEROUT_PATH,
         },
@@ -161,8 +161,10 @@ def judgeSingleSubtask(task, paths):
         log_dict=log_dict,
     )
 
+    checker_path = path.join(__package__, '..', 'utils', 'tolerant_diff.py')
+
     subp_checker = subprocess.run(
-        path.join(__package__, '..', 'utils', 'tolerant_diff.py'),
+        checker_path,
         input=cxt.SerializeToString(),
         stdout=subprocess.PIPE
     )
@@ -170,7 +172,8 @@ def judgeSingleSubtask(task, paths):
     resp.ParseFromString(subp_checker.stdout)
 
     # alternative way for a Python file; faster
-    # tolerantDiff = runpy.run_path(utility_path)
+    # import runpy
+    # tolerantDiff = runpy.run_path(checker_path)
     # resp = tolerantDiff['main'](cxt)
 
     if resp.verdict != HojVerdict.AC.value:
@@ -276,7 +279,7 @@ def judgeSubmission(submission, judge_desc):
             cur_group_no = 0
             cur_group_accepted = True
 
-        msg = 'Judging subtask (group #{}, {}/{}):'.format(group_num, cur_group_no + 1, cur_group_count)
+        msg = 'Judging subtask group #{}, {}/{}:'.format(group_num, cur_group_no + 1, cur_group_count)
         print(color(msg, fg='blue', style='bold'), task)
 
         verdict, info = judgeSingleSubtask(task, next(testdata_iter))
