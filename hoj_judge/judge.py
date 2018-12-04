@@ -1,3 +1,4 @@
+import logging
 import math
 import os
 from os import path
@@ -33,6 +34,9 @@ cmd_task_tpl = ('sudo -C {fd_close_from} -u nobody '
     '-- {exec}')
 
 cmd_compile_tpl = 'g++ -Wall -O2 -fdiagnostics-color=always -o {output} {src}'
+cmd_compile_checker_tpl = 'g++ -O2 -fdiagnostics-color=always -o {output} {src}'
+
+logger = logging.getLogger('hoj_judge')
 
 
 def taskCompile(cmd, logf_compile, verbose=True):
@@ -51,7 +55,7 @@ def taskCompile(cmd, logf_compile, verbose=True):
 
     return subp, t
 
-def judgeSingleSubtask(task, paths):
+def judgeSingleSubtask(task, paths, checker_args):
     infile, outfile = paths
 
     log_file = open(TMP_RUNLOG_PATH, 'w+')
@@ -71,7 +75,6 @@ def judgeSingleSubtask(task, paths):
 
     f_in = open(infile, 'r')
     f_out_user = open(TMP_USEROUT_PATH, 'w+')
-
 
     time_task = time.perf_counter()
 
@@ -105,7 +108,7 @@ def judgeSingleSubtask(task, paths):
         log_dict[mat.group(1)] = mat.group(2)
     log_file.close()
 
-    print(log_dict)
+    logger.info(log_dict)
 
     log_used_keys = [
         'cgroup_memory_failcnt',
@@ -143,10 +146,8 @@ def judgeSingleSubtask(task, paths):
         print(color('===== {:3} ====='.format(verdict.name), fg='magenta', style='negative'))
         return verdict, log_dict
 
-    # judge by reading the file's content
-    # TODO: special judge; should accept score and return judged score
-
     cxt = protos.subtask_context_pb2.SubtaskContext(
+        # TODO: fill in counter info
         subtask={
             'time_limit': task.time_limit,
             'mem_limit': task.mem_limit,
@@ -161,38 +162,41 @@ def judgeSingleSubtask(task, paths):
         log_dict=log_dict,
     )
 
-    checker_path = path.join(__package__, '..', 'utils', 'tolerant_diff.py')
-
     subp_checker = subprocess.run(
-        checker_path,
+        checker_args,
         input=cxt.SerializeToString(),
         stdout=subprocess.PIPE
     )
+
     resp = protos.subtask_response_pb2.SubtaskResponse()
-    resp.ParseFromString(subp_checker.stdout)
+    if subp_checker.returncode == 0:
+        resp.ParseFromString(subp_checker.stdout)
+    else:
+        resp.verdict = HojVerdict.SERR.value
 
     # alternative way for a Python file; faster
     # import runpy
     # tolerantDiff = runpy.run_path(checker_path)
     # resp = tolerantDiff['main'](cxt)
 
-    if resp.verdict != HojVerdict.AC.value:
+    if resp.verdict == HojVerdict.WA.value:
         lineno_wrap = Int64Value()
+        # lineno only makes sense in tolerantDiff
         resp.meta['lineno'].Unpack(lineno_wrap)
         print(color('===== WA  =====', fg='red', style='negative') +
               '  @ line {}'.format(lineno_wrap.value))
         return HojVerdict.WA, log_dict
+    elif resp.verdict != HojVerdict.AC.value:
+        print(color('===== {:3} ====='.format(HojVerdict(resp.verdict).name), fg='blue', style='negative'))
+        return HojVerdict(resp.verdict), log_dict
 
     print(color('===== AC  =====', fg='green', style='negative'))
-    return HojVerdict.AC, log_dict
+    return HojVerdict(resp.verdict), log_dict
 
 def judgeSubmission(submission, judge_desc):
     problem = submission.problem
     print('Sandbox path is set to {}'.format(color(SANDBOX_PATH, style='bold')))
     print()
-
-    if problem.problem_special:
-        raise NotImplementedError('There is currently no support for special judge.')
 
     print(color('--- Judge Description', style='bold'))
     print(judge_desc)
@@ -235,6 +239,34 @@ def judgeSubmission(submission, judge_desc):
 
     print()
 
+    if problem.problem_special:
+        print(color('Special judge. Compiling checker...', style='bold'))
+
+        checker_out = '/tmp/special.cpp'
+        checker_exec = '/run/shm/checker'
+
+        with open(checker_out, 'w') as f:
+            f.write(problem.problem_check)
+
+        cmd_compile_special = cmd_compile_checker_tpl.format(
+            src=shlex.quote(checker_out),
+            output=checker_exec
+        )
+
+        subp = subprocess.run(
+            shlex.split(cmd_compile_special) + ['-I' + path.realpath('include')],
+            cwd=SANDBOX_PATH  # should be JUDGE_ROOT
+        )
+        if subp.returncode != 0:
+            raise Exception('Failed to compile checker')
+
+        checker_args = [
+            path.join(__package__, '..', 'utils', 'hoj_special_judge.py'),
+            checker_exec
+        ]
+    else:
+        checker_args = [path.join(__package__, '..', 'utils', 'tolerant_diff.py')]
+
     print(color('--- Sample judging tasks', style='bold'))
 
     testdata_iter = iter(_testdata)
@@ -243,7 +275,7 @@ def judgeSubmission(submission, judge_desc):
 
     for task in samples:
         print(color('Judging sample:', fg='blue', style='bold'), task)
-        verdict, info = judgeSingleSubtask(task, next(testdata_iter))
+        verdict, info = judgeSingleSubtask(task, next(testdata_iter), checker_args)
 
         judge_results.append([
             verdict,
@@ -282,7 +314,7 @@ def judgeSubmission(submission, judge_desc):
         msg = 'Judging subtask group #{}, {}/{}:'.format(group_num, cur_group_no + 1, cur_group_count)
         print(color(msg, fg='blue', style='bold'), task)
 
-        verdict, info = judgeSingleSubtask(task, next(testdata_iter))
+        verdict, info = judgeSingleSubtask(task, next(testdata_iter), checker_args)
         if verdict != HojVerdict.AC and not task.fallthrough:
             cur_group_accepted = False
 
