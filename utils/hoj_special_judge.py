@@ -35,18 +35,24 @@ def symlink_force(*args):
         else:
             raise e
 
-def main(cxt):
+def main(cxt, checker_exec='./checker'):
+    logger.debug('Checker path={}'.format(checker_exec))
+
     pathIn = cxt.subtask.input_path
-    pathOut = cxt.subtask.output_path
     pathOut_user = cxt.subtask.output_user_path
+    pathOut = cxt.subtask.output_path
 
     pShmIn = '/run/shm/in.txt'
     pShmOut = '/run/shm/out.txt'
     pShmAns = '/run/shm/ans.txt'
 
+    for p, pShm in zip([pathIn, pathOut_user, pathOut],
+                       [pShmIn, pShmOut, pShmAns]):
+        if not p:
+            raise ValueError('Missing path to {}'.format(pShm))
+
     # link to "in.txt", "out.txt", "ans.txt"
     # because some dumb checkers hardcode these filenames :(
-
     symlink_force(path.realpath(pathIn), pShmIn)
     symlink_force(path.realpath(pathOut_user), pShmOut)
     symlink_force(path.realpath(pathOut), pShmAns)
@@ -84,11 +90,14 @@ def main(cxt):
 
 
 if __name__ == '__main__':
-    # read a protobuf from stdin
+    if len(sys.argv) > 2:
+        sys.stderr.write('Wrong number of arguments.\nUsage: {} [checker-path]\n'.format(sys.argv[0]))
+        sys.exit(1)
+
     cxtInpBin = sys.stdin.buffer.read()
 
     cxt = subtask_context_pb2.SubtaskContext()
     cxt.ParseFromString(cxtInpBin)
 
-    cxtOut = main(cxt)
+    cxtOut = main(cxt, *sys.argv[1:])
     sys.stdout.buffer.write(cxtOut.SerializeToString())
