@@ -25,7 +25,7 @@ TMP_COMPLOG_PATH = '/run/shm/compile.log'
 PROG_EXEC_PATH = './program'
 SOURCE_FILENAME = 'test-file.cpp'
 
-# for security reasons, sudo closes fds that are larger some integer (2 by default).
+# for security reasons, sudo closes fds that are larger by some integer (2 by default).
 # since we want to keep them in order to keep logs, we need to configure sudo to allow
 # exceptions to allow overriding this limitation
 cmd_task_tpl = ('sudo -C {fd_close_from} -u nobody '
@@ -113,6 +113,7 @@ def judgeSingleSubtask(task, paths, checker_args):
     log_used_keys = [
         'cgroup_memory_failcnt',
         'cgroup_memory_max_usage',
+        'exit_normally',
         'time'
     ]
 
@@ -132,7 +133,7 @@ def judgeSingleSubtask(task, paths, checker_args):
 
     if log_dict['cgroup_memory_failcnt'] != '0':
         verdict = HojVerdict.MLE
-    elif time_used > task.time_limit:
+    elif (log_dict['exit_normally'] == 'false' and time_used >= task.time_limit):
         verdict =  HojVerdict.TLE
     elif subp_task.returncode != 0:
         verdict =  HojVerdict.RE
