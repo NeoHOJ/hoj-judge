@@ -8,7 +8,7 @@ import hoj_judge.judge
 def judgeSubmissionModel(submission):
     problem = submission.problem
     judge_desc = hoj_to_judge_desc(problem.problem_testdata)
-    the_result, the_score = hoj_judge.judge.judgeSubmission(submission, judge_desc)
+    the_result, the_score, log_msg = hoj_judge.judge.judgeSubmission(submission, judge_desc)
 
     if the_score < 0:
         print('Fatal error occurred')
@@ -42,7 +42,8 @@ def judgeSubmissionModel(submission):
             'submission_mem': the_mem,
             'submission_time': the_time,
             'submission_result': the_result,
-            'submission_len': len(submission.submission_code)
+            'submission_len': len(submission.submission_code),
+            'submission_error': log_msg,
         }
     }
 

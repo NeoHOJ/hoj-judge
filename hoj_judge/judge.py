@@ -48,12 +48,17 @@ def taskCompile(cmd, logf_compile, verbose=True):
     )
     t = time.perf_counter() - t
 
+    ansi_escape = re.compile(r'(\x9B|\x1B\[)[0-?]*[ -/]*[@-~]')
+
+    logf_compile.seek(0)
+    msg = ansi_escape.sub('', logf_compile.read())
+
     if verbose:
         logf_compile.seek(0)
         for line in logf_compile.readlines():
             print('>>> {}'.format(line), end='')
 
-    return subp, t
+    return subp, t, msg
 
 def judgeSingleSubtask(task, paths, checker_args):
     infile, outfile = paths
@@ -212,7 +217,7 @@ def judgeSubmission(submission, judge_desc):
     _testdata, testdata_healthy = hoj_collect_testdata(all_tasks, testdata_path_tpl)
     if not testdata_healthy:
         print(color('Failed to collect test data, refusing to continue', fg='red', style='bold'))
-        return None, -1
+        return None, -1, None
     print()
 
     print(color('Writing code to disk...', style='bold'))
@@ -227,7 +232,7 @@ def judgeSubmission(submission, judge_desc):
     )
 
     with open(TMP_COMPLOG_PATH, 'w+') as logf_compile:
-        subp_compile, t = taskCompile(shlex.split(cmd_compile), logf_compile)
+        subp_compile, t, log_msg = taskCompile(shlex.split(cmd_compile), logf_compile)
 
     if subp_compile.returncode == 0:
         print(color('Compilation success after {:.0f}ms'.format(t * 1000), fg='green', style='bold'))
@@ -236,7 +241,7 @@ def judgeSubmission(submission, judge_desc):
 
         # fill all fields with CE
         # TODO: wiring out the error message (how?)
-        return [[HojVerdict.CE, 0, 0] for _ in all_tasks], 0
+        return [[HojVerdict.CE, 0, 0] for _ in all_tasks], 0, log_msg
 
     print()
 
@@ -333,4 +338,5 @@ def judgeSubmission(submission, judge_desc):
             print(color('End of group, giving score {}/{}'.format(score, cur_group_score), fg='blue', style='bold'))
             print()
 
-    return judge_results, score_total
+    # note that the log is sent back even if the compilation succeeds
+    return judge_results, score_total, log_msg
