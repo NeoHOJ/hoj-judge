@@ -49,6 +49,7 @@ def judgeSubmissionModel(submission):
 
 def judgeSubmissionById(id):
     try:
+        m.database_proxy.connect(reuse_if_open=True)
         submission = m.Submission.get(m.Submission.submission == id)
     except m.OperationalError as err:
         print('OperationalError:', err)
@@ -70,8 +71,9 @@ def judgeSubmissionById(id):
     else:
         submission.__data__.update(**outp)
         submission.save()
-
         print('Updated submission in database.')
+
+    m.database_proxy.close()
 
 def main(as_module=False):
     if len(sys.argv) != 2:
