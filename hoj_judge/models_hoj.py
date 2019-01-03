@@ -4,15 +4,16 @@ import os
 from peewee import *
 
 
-database_proxy = Proxy()
+database = Proxy()
+logger_peewee = logging.getLogger('peewee')
+logger_peewee.setLevel(logging.WARNING)
 
-def init(database):
-    database_proxy.initialize(database)
+def init(database_):
+    database.initialize(database_)
 
     if os.environ.get('DEBUG_PEEWEE'):
-        logger = logging.getLogger('peewee')
-        logger.addHandler(logging.StreamHandler())
-        logger.setLevel(logging.DEBUG)
+        logger_peewee.addHandler(logging.StreamHandler())
+        logger_peewee.setLevel(logging.DEBUG)
 
     return database
 
@@ -38,7 +39,7 @@ regarding to foreign keys and default values, and some other tweaks
 '''
 class BaseModel(Model):
     class Meta:
-        database = database_proxy
+        database = database
 
 
 class Contest(BaseModel):

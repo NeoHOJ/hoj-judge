@@ -1,6 +1,13 @@
+import argparse
+import logging
+import logging.config
 import sys
 
+logging.Formatter.default_msec_format = '%s.%03d'
+logger = logging.getLogger(__name__)
+
 from ._hoj_helpers import *
+from hoj_judge.utils import loadConfig
 import hoj_judge.models_hoj as m
 import hoj_judge.judge
 
@@ -11,12 +18,13 @@ def judgeSubmissionModel(submission):
     the_result, the_score, log_msg = hoj_judge.judge.judgeSubmission(submission, judge_desc)
 
     if the_score < 0:
-        print('Fatal error occurred')
+        logger.warning('Fatal error occurred as the score (%d) < 0', the_score)
         sys.exit(1)
 
-    print('--- Results')
+    print('Results:')
     all_tasks = judge_desc.samples + judge_desc.subtasks
     for d, r in zip(all_tasks, the_result):
+        print(' - ', end='')
         print(d, *r)
     print()
 
@@ -49,15 +57,20 @@ def judgeSubmissionModel(submission):
 
 def judgeSubmissionById(id):
     try:
-        m.database_proxy.connect(reuse_if_open=True)
-        submission = m.Submission.get(m.Submission.submission == id)
+        with m.database.connection_context():
+            submission = m.Submission.get(m.Submission.submission == id)
+            is_already_judged = (submission.submission_status != 0)
     except m.OperationalError as err:
-        print('OperationalError:', err)
+        logger.exception('OperationalError:')
         sys.exit(1)
     except m.DoesNotExist:
-        print('Cannot find the submission with id {}.\n'.format(id))
+        logger.critical('Cannot find the submission with id %d.', id)
         sys.exit(1)
 
+    if is_already_judged:
+        logger.warning('Submission is already judged, the record is not updated unless --force is specified.')
+
+    logging.info('Start judging submission of ID %d...', id)
     ret = judgeSubmissionModel(submission)
     outp = ret['update']
 
@@ -66,24 +79,39 @@ def judgeSubmissionById(id):
     print('   (total) time   : {}'.format(outp['submission_time']))
     print('     (max) memory : {}'.format(outp['submission_mem']))
 
-    if submission.submission_status != 0:
-        print('Submission is already judged, skip updating.')
-    else:
+    if not is_already_judged:
         submission.__data__.update(**outp)
-        submission.save()
-        print('Updated submission in database.')
+        with m.database.connection_context():
+            submission.save()
+        logger.info('Updated submission in database.')
 
-    m.database_proxy.close()
+def exec(args):
+        submission_id = args.submission_id
+        m.init(hoj_database)
+        return judgeSubmissionById(submission_id)
 
 def main(as_module=False):
-    if len(sys.argv) != 2:
-        print('Usage: {} <submission-id>'.format(sys.argv[0]))
-        sys.exit(1)
+    config = loadConfig()
+    logging.config.dictConfig(config['logging'])
 
-    submission_id = int(sys.argv[1])
-    m.init(hoj_database)
+    parser = argparse.ArgumentParser(
+        prog='hoj_judge',
+        description='The CLI of HOJ judge backend.')
+    parser.set_defaults(func=lambda _: (parser.print_help(), parser.exit(1)))
 
-    return judgeSubmissionById(submission_id)
+    subparsers = parser.add_subparsers(
+        dest='action',
+        metavar='<action>',
+        help='The action to take')
+
+    parser_exec = subparsers.add_parser('exec',
+        help='Run judge of the specified submission ID.',
+        description='Run judge of specified submission ID.')
+    parser_exec.add_argument('submission_id', type=int, help='submission ID.')
+    parser_exec.set_defaults(func=exec)
+
+    args = parser.parse_args()
+    return args.func(args)
 
 
 if __name__ == '__main__':

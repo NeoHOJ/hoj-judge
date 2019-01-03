@@ -14,6 +14,7 @@ from colors import color
 from google.protobuf.wrappers_pb2 import Int64Value
 import hoj_judge.models_hoj as m
 from . import protos
+from .utils import pformat
 from ._hoj_helpers import *
 
 
@@ -36,29 +37,30 @@ cmd_task_tpl = ('sudo -C {fd_close_from} -u nobody '
 cmd_compile_tpl = 'g++ -Wall -O2 -fdiagnostics-color=always -o {output} {src}'
 cmd_compile_checker_tpl = 'g++ -O2 -fdiagnostics-color=always -o {output} {src}'
 
-logger = logging.getLogger('hoj_judge')
+logger = logging.getLogger(__name__)
 
 
-def taskCompile(cmd, logf_compile, verbose=True):
+def taskCompile(cmd, logf_compile):
+    logger.debug('Starting subproc for task compiling: %r', cmd)
     t = time.perf_counter()
     subp = subprocess.run(
         cmd,
         cwd=SANDBOX_PATH,
         stderr=logf_compile
     )
-    t = time.perf_counter() - t
+    logger.debug('Ending subproc for task compiling after %.0fms', (time.perf_counter() - t) * 1000)
 
     ansi_escape = re.compile(r'(\x9B|\x1B\[)[0-?]*[ -/]*[@-~]')
 
     logf_compile.seek(0)
     msg = ansi_escape.sub('', logf_compile.read())
 
-    if verbose:
-        logf_compile.seek(0)
-        for line in logf_compile.readlines():
-            print('>>> {}'.format(line), end='')
+    # TODO: remove redundency
+    logf_compile.seek(0)
+    for line in logf_compile.readlines():
+        logger.debug('COMPILE >>> %s', line[:-1])
 
-    return subp, t, msg
+    return subp, msg
 
 def judgeSingleSubtask(task, paths, checker_args):
     infile, outfile = paths
@@ -69,7 +71,7 @@ def judgeSingleSubtask(task, paths, checker_args):
     os.chmod(TMP_RUNLOG_PATH, 0o666)
     log_file_fd = log_file.fileno()
 
-    cmd_task = cmd_task_tpl.format(
+    cmd_task_str = cmd_task_tpl.format(
         cwd=shlex.quote(path.realpath(SANDBOX_PATH)),
         time=math.ceil(task.time_limit / 1000),
         mem=math.ceil(task.mem_limit * 1024),
@@ -77,21 +79,29 @@ def judgeSingleSubtask(task, paths, checker_args):
         fd_close_from=log_file_fd + 1,
         exec=PROG_EXEC_PATH
     )
+    cmd_task = shlex.split(cmd_task_str)
 
     f_in = open(infile, 'r')
     f_out_user = open(TMP_USEROUT_PATH, 'w+')
 
     time_task = time.perf_counter()
 
+    logger.debug('Starting subproc for subtask: %r', cmd_task)
+
     subp_task = subprocess.run(
-        shlex.split(cmd_task),
+        cmd_task,
         cwd=path.dirname(__file__),
         stdin=f_in,
         stdout=f_out_user,
+        stderr=subprocess.DEVNULL,
         pass_fds=(log_file_fd,)
     )
 
-    time_task = time.perf_counter() - time_task
+    logger.debug('Ending subproc for subtask after %.0fms', time.perf_counter() - time_task)
+
+    process_failed = (subp_task.returncode != 0)
+    if process_failed:
+        logger.debug('Subtask {} with return code %d'.format(color('failed', fg='yellow'), subp_task.returncode))
 
     f_in.close()
     f_out_user.close()
@@ -100,7 +110,7 @@ def judgeSingleSubtask(task, paths, checker_args):
 
     # get size of the log
     # TODO: interrupt if the log file is empty. the worker probably fails to start up
-    log_file.seek(0, 2)
+    log_file.seek(0, 2)  # SEEK_END = 2
     sz = log_file.tell()
 
     log_file.seek(0)
@@ -108,12 +118,13 @@ def judgeSingleSubtask(task, paths, checker_args):
     for ln in log_file:
         mat = re.match(r'\[S\]\[\d+?\] __STAT__:0 (?:\d+?:)?([\w]+)\s+=\s+(.*)', ln)
         if mat is None:
-            # print('>>> {}'.format(ln), end='')
+            # TODO: triage the message to separate file
+            logger.debug('SANDBOX >>> %s', ln[:-1])
             continue
         log_dict[mat.group(1)] = mat.group(2)
     log_file.close()
 
-    logger.info(log_dict)
+    logger.debug('captured stat dict:\n%s', pformat(log_dict))
 
     log_used_keys = [
         'cgroup_memory_failcnt',
@@ -124,8 +135,9 @@ def judgeSingleSubtask(task, paths, checker_args):
 
     for k in log_used_keys:
         if k not in log_dict:
+            logger.error('Cannot find key "%s" form log, which is mandatory', k)
             print(color('===== SER =====', fg='white', style='negative') +
-                ' Cannot find key "{}" from log'.format(k))
+                ' MISSING_KEY')
             return HojVerdict.SERR, log_dict
 
     time_used = int(log_dict['time'])
@@ -134,7 +146,6 @@ def judgeSingleSubtask(task, paths, checker_args):
     # check if the process ends with error
     # TODO: RF, OLE
     verdict = None
-    process_failed = (subp_task.returncode != 0)
 
     if log_dict['cgroup_memory_failcnt'] != '0':
         verdict = HojVerdict.MLE
@@ -143,13 +154,9 @@ def judgeSingleSubtask(task, paths, checker_args):
     elif subp_task.returncode != 0:
         verdict =  HojVerdict.RE
 
-    if process_failed:
-        print('Subtask {} after {:.0f}ms'.format(color('failed', fg='yellow'), time_task * 1000))
-    else:
-        print('Subtask {} after {:.0f}ms'.format('finished', time_task * 1000))
-
     if verdict is not None:
-        print(color('===== {:3} ====='.format(verdict.name), fg='magenta', style='negative'))
+        print(color('===== {:3} ====='.format(verdict.name), fg='magenta', style='negative') +
+            ' REPORTED_BY_SANDBOX')
         return verdict, log_dict
 
     cxt = protos.subtask_context_pb2.SubtaskContext(
@@ -172,12 +179,19 @@ def judgeSingleSubtask(task, paths, checker_args):
         checker_args,
         input=cxt.SerializeToString(),
         stdout=subprocess.PIPE
+        # TODO: triage stderr; use alt. way to execute (if possible) to integrate log
     )
 
     resp = protos.subtask_response_pb2.SubtaskResponse()
     if subp_checker.returncode == 0:
-        resp.ParseFromString(subp_checker.stdout)
+        # the method name is confusing; it is in fact a byte string
+        try:
+            resp.ParseFromString(subp_checker.stdout)
+        except:
+            logger.exception('Error occurred when attempting to parse the response from the checker')
+            resp.verdict = HojVerdict.SERR.value
     else:
+        logger.error('The checker exits abnormally with return code %d', subp_checker.returncode)
         resp.verdict = HojVerdict.SERR.value
 
     # alternative way for a Python file; faster
@@ -186,14 +200,16 @@ def judgeSingleSubtask(task, paths, checker_args):
     # resp = tolerantDiff['main'](cxt)
 
     if resp.verdict == HojVerdict.WA.value:
-        lineno_wrap = Int64Value()
+        lineno_wrap = Int64Value(value=-1)
         # lineno only makes sense in tolerantDiff
-        resp.meta['lineno'].Unpack(lineno_wrap)
+        if 'lineno' in resp.meta:
+            resp.meta['lineno'].Unpack(lineno_wrap)
         print(color('===== WA  =====', fg='red', style='negative') +
               '  @ line {}'.format(lineno_wrap.value))
         return HojVerdict.WA, log_dict
     elif resp.verdict != HojVerdict.AC.value:
-        print(color('===== {:3} ====='.format(HojVerdict(resp.verdict).name), fg='blue', style='negative'))
+        print(color('===== {:3} ====='.format(HojVerdict(resp.verdict).name), fg='blue', style='negative') +
+            ' REPORTED_BY_CHECKER')
         return HojVerdict(resp.verdict), log_dict
 
     print(color('===== AC  =====', fg='green', style='negative'))
@@ -201,30 +217,31 @@ def judgeSingleSubtask(task, paths, checker_args):
 
 def judgeSubmission(submission, judge_desc):
     problem = submission.problem
-    print('Sandbox path is set to {}'.format(color(SANDBOX_PATH, style='bold')))
-    print()
+    logger.debug('Sandbox path is set to {}'.format(SANDBOX_PATH))
 
-    print(color('--- Judge Description', style='bold'))
-    print(judge_desc)
-    print()
+    logger.debug('--- Judge Description ---\n%s', pformat(dict(judge_desc._asdict())))
 
     samples = judge_desc.samples
     subtasks = judge_desc.subtasks
     all_tasks = samples + subtasks
 
-    print(color('--- Checking test data', style='bold'))
+    print(color('--- Initializing...', style='bold'))
+    logger.info(color('Checking test data...', style='bold'))
     testdata_path_tpl = lambda label, ext: path.join(TESTDATA_PATH, '{}/{}.{}'.format(problem.problem, label, ext))
     _testdata, testdata_healthy = hoj_collect_testdata(all_tasks, testdata_path_tpl)
     if not testdata_healthy:
-        print(color('Failed to collect test data, refusing to continue', fg='red', style='bold'))
+        logger.error(color('Failed to collect test data, refusing to continue', fg='red', style='bold'))
         return None, -1, None
-    print()
 
-    print(color('Writing code to disk...', style='bold'))
-    with open(path.join(SANDBOX_PATH, SOURCE_FILENAME), 'w') as f:
-        f.write(submission.submission_code)
+    logger.info(color('Writing code to disk...', style='bold'))
 
-    print(color('Compiling...', style='bold'))
+    path_src = path.join(SANDBOX_PATH, SOURCE_FILENAME)
+
+    with open(path_src, 'w') as f:
+        nwrt = f.write(submission.submission_code)
+    logger.debug('Written %d byte(s) to %s', nwrt, path_src)
+
+    logger.info(color('Compiling...', style='bold'))
 
     cmd_compile = cmd_compile_tpl.format(
         src=shlex.quote(SOURCE_FILENAME),
@@ -232,20 +249,21 @@ def judgeSubmission(submission, judge_desc):
     )
 
     with open(TMP_COMPLOG_PATH, 'w+') as logf_compile:
-        subp_compile, t, log_msg = taskCompile(shlex.split(cmd_compile), logf_compile)
+        subp_compile, log_msg = taskCompile(shlex.split(cmd_compile), logf_compile)
 
     if subp_compile.returncode == 0:
-        print(color('Compilation success after {:.0f}ms'.format(t * 1000), fg='green', style='bold'))
+        logger.debug('Compile task succeeds')
     else:
-        print(color('Compilation failed after {:.0f}ms'.format(t * 1000), fg='red', style='bold+negative'))
+        logger.debug('Compile task failed with return code %d', subp_compile.returncode)
+        print(color('Failed to compile source', fg='red', style='bold'))
 
         # fill all fields with CE
+        logger.debug('Filling all fields with CE')
         # TODO: wiring out the error message (how?)
         return [[HojVerdict.CE, 0, 0] for _ in all_tasks], 0, log_msg
 
-    print()
-
     if problem.problem_special:
+        logger.debug('Special judge is on')
         print(color('Special judge. Compiling checker...', style='bold'))
 
         checker_out = '/tmp/special.cpp'
@@ -280,7 +298,7 @@ def judgeSubmission(submission, judge_desc):
     pretest_fail = False
 
     for task in samples:
-        print(color('Judging sample:', fg='blue', style='bold'), task)
+        logger.info('------ Start judge sample: %r ------', task)
         verdict, info = judgeSingleSubtask(task, next(testdata_iter), checker_args)
 
         judge_results.append([
@@ -291,8 +309,6 @@ def judgeSubmission(submission, judge_desc):
 
         if verdict == HojVerdict.SERR:
             pretest_fail = True
-
-    print()
 
     if pretest_fail:
         print('Error occurred when running samples -- halting')
@@ -317,8 +333,8 @@ def judgeSubmission(submission, judge_desc):
             cur_group_no = 0
             cur_group_accepted = True
 
-        msg = 'Judging subtask group #{}, {}/{}:'.format(group_num, cur_group_no + 1, cur_group_count)
-        print(color(msg, fg='blue', style='bold'), task)
+        logger.info('------ Start judge subtask (%s, %s/%s): %r ------',
+            group_num, cur_group_no + 1, cur_group_count, task)
 
         verdict, info = judgeSingleSubtask(task, next(testdata_iter), checker_args)
         if verdict != HojVerdict.AC and not task.fallthrough:
@@ -335,8 +351,7 @@ def judgeSubmission(submission, judge_desc):
             score = cur_group_score if cur_group_accepted else 0
             score_total += score
             cur_group_count = None
-            print(color('End of group, giving score {}/{}'.format(score, cur_group_score), fg='blue', style='bold'))
-            print()
+            logger.info('End of group, giving score {}/{}'.format(score, cur_group_score))
 
     # note that the log is sent back even if the compilation succeeds
     return judge_results, score_total, log_msg

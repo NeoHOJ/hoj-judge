@@ -6,3 +6,31 @@ port = 3306
 user = 'test'
 database = 'hoj_judge'
 password = 'test'
+
+[logging]
+version = 1
+disable_existing_loggers = false
+
+[logging.formatters.colored]
+'()' = 'hoj_judge.utils.ColoredFormatter'
+fmt = '{color_apply}[{asctime}] {levelname} {filename}:{lineno}{color_reset} {message}'
+style = '{'
+
+[logging.formatters.for_file]
+'()' = 'hoj_judge.utils.ColorlessFormatter'
+fmt = '[{asctime}] {levelname} {filename}:{lineno} {message}'
+style = '{'
+
+[logging.handlers.console]
+level = 'INFO'
+class = 'logging.StreamHandler'
+formatter = 'colored'
+
+[logging.handlers.log_file]
+class = 'logging.FileHandler'
+formatter = 'for_file'
+filename = 'hoj.log'
+
+[logging.root]
+level = 'DEBUG'
+handlers = [ 'console', 'log_file' ]

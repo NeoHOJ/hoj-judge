@@ -1,17 +1,20 @@
 from enum import Enum
+import logging
 from os import path
 
-import toml
 from colors import color
 from peewee import *
 
+from . import utils
 from .datatypes import TaskDef, TaskSpec
 
 '''
 A bridge to operate on managing submissions in HOJ DB.
 '''
 
-config = toml.load(path.join(path.dirname(__file__), '../config/config.toml'))
+logger = logging.getLogger('_hoj_helpers')
+
+config = utils.loadConfig()
 hoj_database = MySQLDatabase(**config['database'])
 
 class HojTaskDef(TaskDef):
@@ -104,10 +107,14 @@ func_tpl l, x:
     x is either `in` or `out` to produce the file name of either infile or
     outfile.
 '''
-def hoj_collect_testdata(arr_subtasks, func_tpl, verbose=True):
+def hoj_collect_testdata(arr_subtasks, func_tpl):
     exts = ('in', 'out')
     healthy = True
     testdata = []
+
+    is_verbose = logger.isEnabledFor(logging.DEBUG)
+    if is_verbose:
+        verbose_buf = []
 
     for task in arr_subtasks:
         testdata_paths = tuple(func_tpl(task.label, ext) for ext in exts)
@@ -115,22 +122,25 @@ def hoj_collect_testdata(arr_subtasks, func_tpl, verbose=True):
         for ext, p in zip(exts, testdata_paths):
             exists = path.isfile(p)
 
-            if verbose:
+            if is_verbose:
                 if exists:
-                    print('.', end='')
+                    verbose_buf.append('.')
                 else:
-                    print(''.join([
+                    verbose_buf.append(''.join([
                         '\n',
                         color('X', fg='red', style='bold'),
                         ' ERR: {} is not ready '.format(p)
-                    ]), end='')
+                    ]))
 
             if not exists:
                 healthy = False
 
         testdata.append(testdata_paths)
 
-    if verbose:
-        print()
+    if is_verbose and healthy:
+        verbose_buf.append(' OK!')
+
+    if is_verbose:
+        logger.debug('Collecting test data: %s', ''.join(verbose_buf))
 
     return testdata, healthy
