@@ -2,7 +2,7 @@ import logging
 from os import path
 import pprint
 
-from ansicolor import strip_escapes
+from colors import strip_color
 import toml
 
 
@@ -42,4 +42,4 @@ class ColoredFormatter(logging.Formatter):
 class ColorlessFormatter(logging.Formatter):
     def format(self, record):
         rec = super().format(record)
-        return strip_escapes(rec)
+        return strip_color(rec)
