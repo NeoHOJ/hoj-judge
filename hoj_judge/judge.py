@@ -1,8 +1,10 @@
+import io
 import logging
 import math
 import os
 from os import path
 import re
+import resource
 import subprocess
 import shlex
 import sys
@@ -25,6 +27,7 @@ TMP_USEROUT_PATH = '/tmp/test'
 TMP_COMPLOG_PATH = '/run/shm/compile.log'
 PROG_EXEC_PATH = './program'
 SOURCE_FILENAME = 'test-file.cpp'
+COMPILE_MEM_LIM = 128 * 1024 * 1024
 
 # for security reasons, sudo closes fds that are larger by some integer (2 by default).
 # since we want to keep them in order to keep logs, we need to configure sudo to allow
@@ -42,10 +45,15 @@ logger = logging.getLogger(__name__)
 
 def taskCompile(cmd, logf_compile):
     logger.debug('Starting subproc for task compiling: %r', cmd)
+
+    def preexec():
+        resource.setrlimit(resource.RLIMIT_AS, (COMPILE_MEM_LIM, COMPILE_MEM_LIM))
+
     t = time.perf_counter()
     subp = subprocess.run(
         cmd,
         cwd=SANDBOX_PATH,
+        preexec_fn=preexec,
         stderr=logf_compile
     )
     logger.debug('Ending subproc for task compiling after %.0fms', (time.perf_counter() - t) * 1000)
@@ -53,11 +61,11 @@ def taskCompile(cmd, logf_compile):
     ansi_escape = re.compile(r'(\x9B|\x1B\[)[0-?]*[ -/]*[@-~]')
 
     logf_compile.seek(0)
-    msg = ansi_escape.sub('', logf_compile.read())
+    msg = ansi_escape.sub('', logf_compile.read(16384))
 
+    buf = io.StringIO(msg)
     # TODO: remove redundency
-    logf_compile.seek(0)
-    for line in logf_compile.readlines():
+    for line in buf.readlines():
         logger.debug('COMPILE >>> %s', line[:-1])
 
     return subp, msg
