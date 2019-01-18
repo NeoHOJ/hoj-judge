@@ -57,7 +57,7 @@ def judgeSubmissionModel(submission):
 
 def judgeSubmissionById(id):
     try:
-        with m.database.connection_context():
+        with m.connection_context():
             submission = m.Submission.get(m.Submission.submission == id)
             is_already_judged = (submission.submission_status != 0)
     except m.OperationalError as err:
@@ -81,7 +81,7 @@ def judgeSubmissionById(id):
 
     if not is_already_judged:
         submission.__data__.update(**outp)
-        with m.database.connection_context():
+        with m.connection_context():
             submission.save()
         logger.info('Updated submission in database.')
 

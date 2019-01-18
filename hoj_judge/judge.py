@@ -10,21 +10,25 @@ import shlex
 import sys
 import time
 
+
 from peewee import *
 from colors import color
 
 from google.protobuf.wrappers_pb2 import Int64Value
 import hoj_judge.models_hoj as m
 from . import protos
+from . import pipes
 from .utils import pformat
 from ._hoj_helpers import *
 
 
 SANDBOX_PATH = '/run/shm/judge'
 TESTDATA_PATH = path.relpath(path.join(__package__, '..', 'testdata'))
-TMP_RUNLOG_PATH = '/run/shm/sandbox.log'
-TMP_USEROUT_PATH = '/tmp/test'
-TMP_COMPLOG_PATH = '/run/shm/compile.log'
+# TMP_RUNLOG_PATH = '/run/shm/sandbox.log'
+# TMP_USEROUT_PATH = '/tmp/test'
+# TMP_COMPLOG_PATH = '/run/shm/compile.log'
+LOG_STDOUT_PATH = '/tmp/judge.stdout.log'
+LOG_STDERR_PATH = '/tmp/judge.stderr.log'
 PROG_EXEC_PATH = './program'
 SOURCE_FILENAME = 'test-file.cpp'
 COMPILE_MEM_LIM = 128 * 1024 * 1024
@@ -58,17 +62,31 @@ def taskCompile(cmd, logf_compile):
     )
     logger.debug('Ending subproc for task compiling after %.0fms', (time.perf_counter() - t) * 1000)
 
-    ansi_escape = re.compile(r'(\x9B|\x1B\[)[0-?]*[ -/]*[@-~]')
-
-    logf_compile.seek(0)
-    msg = ansi_escape.sub('', logf_compile.read(16384))
+    msg = logf_compile._read()
 
     buf = io.StringIO(msg)
     # TODO: remove redundency
     for line in buf.readlines():
         logger.debug('COMPILE >>> %s', line[:-1])
 
-    return subp, msg
+    return subp
+
+def taskCompileChecker(problem, checker_out, checker_exec):
+    with open(checker_out, 'w') as f:
+        f.write(problem.problem_check)
+
+    cmd_compile_special = cmd_compile_checker_tpl.format(
+        src=shlex.quote(checker_out),
+        output=checker_exec
+    )
+
+    subp = subprocess.run(
+        shlex.split(cmd_compile_special) + ['-I' + path.realpath('include')],
+        cwd=SANDBOX_PATH  # should be JUDGE_ROOT
+    )
+    if subp.returncode != 0:
+        raise Exception('Failed to compile checker')
+
 
 def judgeSingleSubtask(task, paths, checker_args):
     infile, outfile = paths
@@ -249,117 +267,120 @@ def judgeSubmission(submission, judge_desc):
         nwrt = f.write(submission.submission_code)
     logger.debug('Written %d byte(s) to %s', nwrt, path_src)
 
+    # prepare piping threads
+    logfile_stdout = open(LOG_STDOUT_PATH, 'w+')
+    logfile_stderr = open(LOG_STDERR_PATH, 'w+')
+
     logger.info(color('Compiling...', style='bold'))
 
-    cmd_compile = cmd_compile_tpl.format(
-        src=shlex.quote(SOURCE_FILENAME),
-        output=PROG_EXEC_PATH
-    )
+    with pipes.LogPipe(logfile_stdout, logfile_stderr) as logpipe:
 
-    with open(TMP_COMPLOG_PATH, 'w+') as logf_compile:
-        subp_compile, log_msg = taskCompile(shlex.split(cmd_compile), logf_compile)
-
-    if subp_compile.returncode == 0:
-        logger.debug('Compile task succeeds')
-    else:
-        logger.debug('Compile task failed with return code %d', subp_compile.returncode)
-        print(color('Failed to compile source', fg='red', style='bold'))
-
-        # fill all fields with CE
-        logger.debug('Filling all fields with CE')
-        # TODO: wiring out the error message (how?)
-        return [[HojVerdict.CE, 0, 0] for _ in all_tasks], 0, log_msg
-
-    if problem.problem_special:
-        logger.debug('Special judge is on')
-        print(color('Special judge. Compiling checker...', style='bold'))
-
-        checker_out = '/tmp/special.cpp'
-        checker_exec = '/run/shm/checker'
-
-        with open(checker_out, 'w') as f:
-            f.write(problem.problem_check)
-
-        cmd_compile_special = cmd_compile_checker_tpl.format(
-            src=shlex.quote(checker_out),
-            output=checker_exec
+        cmd_compile = cmd_compile_tpl.format(
+            src=shlex.quote(SOURCE_FILENAME),
+            output=PROG_EXEC_PATH
         )
 
-        subp = subprocess.run(
-            shlex.split(cmd_compile_special) + ['-I' + path.realpath('include')],
-            cwd=SANDBOX_PATH  # should be JUDGE_ROOT
-        )
-        if subp.returncode != 0:
-            raise Exception('Failed to compile checker')
+        comp_loglim = 8192
+        with logpipe.pipe('COMPILE', max_stdout=0, max_stderr=comp_loglim) as (_, logf_compile):
+            subp_compile = taskCompile(shlex.split(cmd_compile), logf_compile)
 
-        checker_args = [
-            path.join(__package__, '..', 'utils', 'hoj_special_judge.py'),
-            checker_exec
-        ]
-    else:
-        checker_args = [path.join(__package__, '..', 'utils', 'tolerant_diff.py')]
+        _comp_stderr = logpipe.readFromPipe('COMPILE', is_stderr=True)
+        if len(_comp_stderr) >= comp_loglim:
+            _comp_stderr += f'<< Truncated at {comp_loglim} chars. The message above may be incomplete. >>'
 
-    print(color('--- Sample judging tasks', style='bold'))
+        ansi_escape = re.compile(r'(\x9B|\x1B\[)[0-?]*[ -/]*[@-~]')
+        log_msg = ansi_escape.sub('', _comp_stderr)
 
-    testdata_iter = iter(_testdata)
-    judge_results = []
-    pretest_fail = False
+        if subp_compile.returncode == 0:
+            logger.debug('Compile task succeeds')
+        else:
+            logger.debug('Compile task failed with return code %d', subp_compile.returncode)
+            print(color('Failed to compile source', fg='red', style='bold'))
 
-    for task in samples:
-        logger.info('------ Start judge sample: %r ------', task)
-        verdict, info = judgeSingleSubtask(task, next(testdata_iter), checker_args)
+            # fill all fields with CE
+            logger.debug('Filling all fields with CE')
+            # TODO: wiring out the error message (how?)
+            return [[HojVerdict.CE, 0, 0] for _ in all_tasks], 0, log_msg
 
-        judge_results.append([
-            verdict,
-            int(info.get('time', -1)),
-            int(info.get('cgroup_memory_max_usage', -1))
-        ])
+        if problem.problem_special:
+            logger.debug('Special judge is on')
+            print(color('Special judge. Compiling checker...', style='bold'))
 
-        if verdict == HojVerdict.SERR:
-            pretest_fail = True
+            checker_out = '/tmp/special.cpp'
+            checker_exec = '/run/shm/checker'
 
-    if pretest_fail:
-        print('Error occurred when running samples -- halting')
-        results = judge_results + [[HojVerdict.OTHER, -1, -1] for _ in subtasks]
-        return results, 0
+            taskCompileChecker(problem, checker_out, checker_exec)
 
-    print(color('--- Real judging tasks', style='bold'))
+            checker_args = [
+                path.join(__package__, '..', 'utils', 'hoj_special_judge.py'),
+                checker_exec
+            ]
+        else:
+            checker_args = [path.join(__package__, '..', 'utils', 'tolerant_diff.py')]
 
-    score_total = 0
+        print(color('--- Sample judging tasks', style='bold'))
 
-    group_num = 0
-    task_group_iter = iter(judge_desc.task_groups)
+        testdata_iter = iter(_testdata)
+        judge_results = []
+        pretest_fail = False
 
-    cur_group_no = 0
-    cur_group_count, cur_group_score = None, 0
-    cur_group_accepted = True
+        for task in samples:
+            logger.info('------ Start judge sample: %r ------', task)
+            verdict, info = judgeSingleSubtask(task, next(testdata_iter), checker_args)
 
-    for task in subtasks:
-        if cur_group_count is None:
-            cur_group_count, cur_group_score = next(task_group_iter)
-            group_num += 1
-            cur_group_no = 0
-            cur_group_accepted = True
+            judge_results.append([
+                verdict,
+                int(info.get('time', -1)),
+                int(info.get('cgroup_memory_max_usage', -1))
+            ])
 
-        logger.info('------ Start judge subtask (%s, %s/%s): %r ------',
-            group_num, cur_group_no + 1, cur_group_count, task)
+            if verdict == HojVerdict.SERR:
+                pretest_fail = True
 
-        verdict, info = judgeSingleSubtask(task, next(testdata_iter), checker_args)
-        if verdict != HojVerdict.AC and not task.fallthrough:
-            cur_group_accepted = False
+        if pretest_fail:
+            print('Error occurred when running samples -- halting')
+            results = judge_results + [[HojVerdict.OTHER, -1, -1] for _ in subtasks]
+            return results, 0
 
-        judge_results.append([
-            verdict,
-            int(info.get('time', -1)),
-            int(info.get('cgroup_memory_max_usage', -1))
-        ])
+        print(color('--- Real judging tasks', style='bold'))
 
-        cur_group_no += 1
-        if cur_group_no >= cur_group_count:
-            score = cur_group_score if cur_group_accepted else 0
-            score_total += score
-            cur_group_count = None
-            logger.info('End of group, giving score {}/{}'.format(score, cur_group_score))
+        score_total = 0
+
+        group_num = 0
+        task_group_iter = iter(judge_desc.task_groups)
+
+        cur_group_no = 0
+        cur_group_count, cur_group_score = None, 0
+        cur_group_accepted = True
+
+        for task in subtasks:
+            if cur_group_count is None:
+                cur_group_count, cur_group_score = next(task_group_iter)
+                group_num += 1
+                cur_group_no = 0
+                cur_group_accepted = True
+
+            logger.info('------ Start judge subtask (%s, %s/%s): %r ------',
+                group_num, cur_group_no + 1, cur_group_count, task)
+
+            verdict, info = judgeSingleSubtask(task, next(testdata_iter), checker_args)
+            if verdict != HojVerdict.AC and not task.fallthrough:
+                cur_group_accepted = False
+
+            judge_results.append([
+                verdict,
+                int(info.get('time', -1)),
+                int(info.get('cgroup_memory_max_usage', -1))
+            ])
+
+            cur_group_no += 1
+            if cur_group_no >= cur_group_count:
+                score = cur_group_score if cur_group_accepted else 0
+                score_total += score
+                cur_group_count = None
+                logger.info('End of group, giving score {}/{}'.format(score, cur_group_score))
+
+        logger.info('Closing log pipe')
 
     # note that the log is sent back even if the compilation succeeds
     return judge_results, score_total, log_msg

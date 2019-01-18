@@ -4,18 +4,21 @@ import os
 from peewee import *
 
 
-database = Proxy()
-logger_peewee = logging.getLogger('peewee')
-logger_peewee.setLevel(logging.WARNING)
+DATABASE = Proxy()
+LOGGER_PEEWEE = logging.getLogger('peewee')
+LOGGER_PEEWEE.setLevel(logging.WARNING)
 
 def init(database_):
-    database.initialize(database_)
+    DATABASE.initialize(database_)
 
     if os.environ.get('DEBUG_PEEWEE'):
-        logger_peewee.addHandler(logging.StreamHandler())
-        logger_peewee.setLevel(logging.DEBUG)
+        LOGGER_PEEWEE.addHandler(logging.StreamHandler())
+        LOGGER_PEEWEE.setLevel(logging.DEBUG)
 
-    return database
+    return DATABASE
+
+def connection_context():
+    return DATABASE.connection_context()
 
 
 class TabularIntgralField(TextField):
@@ -39,7 +42,7 @@ regarding to foreign keys and default values, and some other tweaks
 '''
 class BaseModel(Model):
     class Meta:
-        database = database
+        database = DATABASE
 
 
 class Contest(BaseModel):
