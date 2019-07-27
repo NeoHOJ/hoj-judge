@@ -54,7 +54,7 @@ def taskCompile(cmd, journals, limit):
         resource.setrlimit(resource.RLIMIT_AS, (COMPILE_MEM_LIM, COMPILE_MEM_LIM))
 
     t = time.perf_counter()
-    subp = pipes.run_with_pipes(
+    subp, ole = pipes.run_with_pipes(
         cmd,
         cwd=SANDBOX_PATH,
         preexec_fn=preexec,
@@ -69,7 +69,7 @@ def taskCompile(cmd, journals, limit):
     for line in buf.readlines():
         logger.debug('COMPILE >>> %s', line[:-1])
 
-    return subp
+    return subp, ole
 
 def taskCompileChecker(problem, checker_out, checker_exec):
     with open(checker_out, 'w') as f:
@@ -287,11 +287,11 @@ def judgeSubmission(submission, judge_desc):
         subp_compile, is_ole = taskCompile(shlex.split(cmd_compile), journals, comp_loglim)
 
     _comp_stderr = journals[1].dump('COMPILE')
-    if len(_comp_stderr) >= comp_loglim:
-        _comp_stderr += f'<< Truncated at {comp_loglim} chars. The message above may be incomplete. >>'
-
     ansi_escape = re.compile(r'(\x9B|\x1B\[)[0-?]*[ -/]*[@-~]')
     log_msg = ansi_escape.sub('', _comp_stderr)
+
+    if is_ole:
+        log_msg += f'@<< Truncated at {comp_loglim} chars. The message above may be incomplete. >>'
 
     if subp_compile.returncode == 0:
         logger.debug('Compile task succeeds')
