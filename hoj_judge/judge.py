@@ -24,9 +24,9 @@ from ._hoj_helpers import *
 
 SANDBOX_PATH = '/run/shm/judge'
 TESTDATA_PATH = path.relpath(path.join(__package__, '..', 'testdata'))
-# TMP_RUNLOG_PATH = '/run/shm/sandbox.log'
-# TMP_USEROUT_PATH = '/tmp/test'
-# TMP_COMPLOG_PATH = '/run/shm/compile.log'
+TMP_RUNLOG_PATH = '/run/shm/sandbox.log'
+TMP_USEROUT_PATH = '/tmp/test'
+TMP_COMPLOG_PATH = '/run/shm/compile.log'
 LOG_STDOUT_PATH = '/tmp/judge.stdout.log'
 LOG_STDERR_PATH = '/tmp/judge.stderr.log'
 PROG_EXEC_PATH = './program'
@@ -47,22 +47,22 @@ cmd_compile_checker_tpl = 'g++ -O2 -fdiagnostics-color=always -o {output} {src}'
 logger = logging.getLogger(__name__)
 
 
-def taskCompile(cmd, logf_compile):
+def taskCompile(cmd, journals, limit):
     logger.debug('Starting subproc for task compiling: %r', cmd)
 
     def preexec():
         resource.setrlimit(resource.RLIMIT_AS, (COMPILE_MEM_LIM, COMPILE_MEM_LIM))
 
     t = time.perf_counter()
-    subp = subprocess.run(
+    subp = pipes.run_with_pipes(
         cmd,
         cwd=SANDBOX_PATH,
         preexec_fn=preexec,
-        stderr=logf_compile
+        pipe_stderr=(journals[1], limit),
     )
     logger.debug('Ending subproc for task compiling after %.0fms', (time.perf_counter() - t) * 1000)
 
-    msg = logf_compile._read()
+    msg = journals[1]._read()
 
     buf = io.StringIO(msg)
     # TODO: remove redundency
@@ -273,114 +273,114 @@ def judgeSubmission(submission, judge_desc):
 
     logger.info(color('Compiling...', style='bold'))
 
-    with pipes.LogPipe(logfile_stdout, logfile_stderr) as logpipe:
 
-        cmd_compile = cmd_compile_tpl.format(
-            src=shlex.quote(SOURCE_FILENAME),
-            output=PROG_EXEC_PATH
-        )
+    journals = pipes.Journals(logfile_stdout, logfile_stderr)
 
-        comp_loglim = 8192
-        with logpipe.pipe('COMPILE', max_stdout=0, max_stderr=comp_loglim) as (_, logf_compile):
-            subp_compile = taskCompile(shlex.split(cmd_compile), logf_compile)
+    # with 1:
+    cmd_compile = cmd_compile_tpl.format(
+        src=shlex.quote(SOURCE_FILENAME),
+        output=PROG_EXEC_PATH
+    )
 
-        _comp_stderr = logpipe.readFromPipe('COMPILE', is_stderr=True)
-        if len(_comp_stderr) >= comp_loglim:
-            _comp_stderr += f'<< Truncated at {comp_loglim} chars. The message above may be incomplete. >>'
+    comp_loglim = 8192
+    with journals.start(None, 'COMPILE'):
+        subp_compile, is_ole = taskCompile(shlex.split(cmd_compile), journals, comp_loglim)
 
-        ansi_escape = re.compile(r'(\x9B|\x1B\[)[0-?]*[ -/]*[@-~]')
-        log_msg = ansi_escape.sub('', _comp_stderr)
+    _comp_stderr = journals[1].dump('COMPILE')
+    if len(_comp_stderr) >= comp_loglim:
+        _comp_stderr += f'<< Truncated at {comp_loglim} chars. The message above may be incomplete. >>'
 
-        if subp_compile.returncode == 0:
-            logger.debug('Compile task succeeds')
-        else:
-            logger.debug('Compile task failed with return code %d', subp_compile.returncode)
-            print(color('Failed to compile source', fg='red', style='bold'))
+    ansi_escape = re.compile(r'(\x9B|\x1B\[)[0-?]*[ -/]*[@-~]')
+    log_msg = ansi_escape.sub('', _comp_stderr)
 
-            # fill all fields with CE
-            logger.debug('Filling all fields with CE')
-            # TODO: wiring out the error message (how?)
-            return [[HojVerdict.CE, 0, 0] for _ in all_tasks], 0, log_msg
+    if subp_compile.returncode == 0:
+        logger.debug('Compile task succeeds')
+    else:
+        logger.debug('Compile task failed with return code %d', subp_compile.returncode)
+        print(color('Failed to compile source', fg='red', style='bold'))
 
-        if problem.problem_special:
-            logger.debug('Special judge is on')
-            print(color('Special judge. Compiling checker...', style='bold'))
+        # fill all fields with CE
+        logger.debug('Filling all fields with CE')
+        # TODO: wiring out the error message (how?)
+        return [[HojVerdict.CE, 0, 0] for _ in all_tasks], 0, log_msg
 
-            checker_out = '/tmp/special.cpp'
-            checker_exec = '/run/shm/checker'
+    if problem.problem_special:
+        logger.debug('Special judge is on')
+        print(color('Special judge. Compiling checker...', style='bold'))
 
-            taskCompileChecker(problem, checker_out, checker_exec)
+        checker_out = '/tmp/special.cpp'
+        checker_exec = '/run/shm/checker'
 
-            checker_args = [
-                path.join(__package__, '..', 'utils', 'hoj_special_judge.py'),
-                checker_exec
-            ]
-        else:
-            checker_args = [path.join(__package__, '..', 'utils', 'tolerant_diff.py')]
+        taskCompileChecker(problem, checker_out, checker_exec)
 
-        print(color('--- Sample judging tasks', style='bold'))
+        checker_args = [
+            path.join(__package__, '..', 'utils', 'hoj_special_judge.py'),
+            checker_exec
+        ]
+    else:
+        checker_args = [path.join(__package__, '..', 'utils', 'tolerant_diff.py')]
 
-        testdata_iter = iter(_testdata)
-        judge_results = []
-        pretest_fail = False
+    print(color('--- Sample judging tasks', style='bold'))
 
-        for task in samples:
-            logger.info('------ Start judge sample: %r ------', task)
-            verdict, info = judgeSingleSubtask(task, next(testdata_iter), checker_args)
+    testdata_iter = iter(_testdata)
+    judge_results = []
+    pretest_fail = False
 
-            judge_results.append([
-                verdict,
-                int(info.get('time', -1)),
-                int(info.get('cgroup_memory_max_usage', -1))
-            ])
+    for task in samples:
+        logger.info('------ Start judge sample: %r ------', task)
+        verdict, info = judgeSingleSubtask(task, next(testdata_iter), checker_args)
 
-            if verdict == HojVerdict.SERR:
-                pretest_fail = True
+        judge_results.append([
+            verdict,
+            int(info.get('time', -1)),
+            int(info.get('cgroup_memory_max_usage', -1))
+        ])
 
-        if pretest_fail:
-            print('Error occurred when running samples -- halting')
-            results = judge_results + [[HojVerdict.OTHER, -1, -1] for _ in subtasks]
-            return results, 0
+        if verdict == HojVerdict.SERR:
+            pretest_fail = True
 
-        print(color('--- Real judging tasks', style='bold'))
+    if pretest_fail:
+        print('Error occurred when running samples -- halting')
+        results = judge_results + [[HojVerdict.OTHER, -1, -1] for _ in subtasks]
+        return results, 0
 
-        score_total = 0
+    print(color('--- Real judging tasks', style='bold'))
 
-        group_num = 0
-        task_group_iter = iter(judge_desc.task_groups)
+    score_total = 0
 
-        cur_group_no = 0
-        cur_group_count, cur_group_score = None, 0
-        cur_group_accepted = True
+    group_num = 0
+    task_group_iter = iter(judge_desc.task_groups)
 
-        for task in subtasks:
-            if cur_group_count is None:
-                cur_group_count, cur_group_score = next(task_group_iter)
-                group_num += 1
-                cur_group_no = 0
-                cur_group_accepted = True
+    cur_group_no = 0
+    cur_group_count, cur_group_score = None, 0
+    cur_group_accepted = True
 
-            logger.info('------ Start judge subtask (%s, %s/%s): %r ------',
-                group_num, cur_group_no + 1, cur_group_count, task)
+    for task in subtasks:
+        if cur_group_count is None:
+            cur_group_count, cur_group_score = next(task_group_iter)
+            group_num += 1
+            cur_group_no = 0
+            cur_group_accepted = True
 
-            verdict, info = judgeSingleSubtask(task, next(testdata_iter), checker_args)
-            if verdict != HojVerdict.AC and not task.fallthrough:
-                cur_group_accepted = False
+        logger.info('------ Start judge subtask (%s, %s/%s): %r ------',
+            group_num, cur_group_no + 1, cur_group_count, task)
 
-            judge_results.append([
-                verdict,
-                int(info.get('time', -1)),
-                int(info.get('cgroup_memory_max_usage', -1))
-            ])
+        verdict, info = judgeSingleSubtask(task, next(testdata_iter), checker_args)
+        if verdict != HojVerdict.AC and not task.fallthrough:
+            cur_group_accepted = False
 
-            cur_group_no += 1
-            if cur_group_no >= cur_group_count:
-                score = cur_group_score if cur_group_accepted else 0
-                score_total += score
-                cur_group_count = None
-                logger.info('End of group, giving score {}/{}'.format(score, cur_group_score))
+        judge_results.append([
+            verdict,
+            int(info.get('time', -1)),
+            int(info.get('cgroup_memory_max_usage', -1))
+        ])
 
-        logger.info('Closing log pipe')
+        cur_group_no += 1
+        if cur_group_no >= cur_group_count:
+            score = cur_group_score if cur_group_accepted else 0
+            score_total += score
+            cur_group_count = None
+            logger.info('End of group, giving score {}/{}'.format(score, cur_group_score))
 
     # note that the log is sent back even if the compilation succeeds
     return judge_results, score_total, log_msg
