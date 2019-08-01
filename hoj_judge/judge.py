@@ -30,8 +30,11 @@ TMP_COMPLOG_PATH = '/run/shm/compile.log'
 LOG_STDOUT_PATH = '/tmp/judge.stdout.log'
 LOG_STDERR_PATH = '/tmp/judge.stderr.log'
 PROG_EXEC_PATH = './program'
+
 SOURCE_FILENAME = 'test-file.cpp'
 COMPILE_MEM_LIM = 128 * 1024 * 1024
+COMPILE_OUT_LIM = 8 * 1024
+USER_OUTPUT_LIM = 64 * 1024 * 1024  # 64MB is enough for most cases (?)
 
 # for security reasons, sudo closes fds that are larger by some integer (2 by default).
 # since we want to keep them in order to keep logs, we need to configure sudo to allow
@@ -47,7 +50,7 @@ cmd_compile_checker_tpl = 'g++ -O2 -fdiagnostics-color=always -o {output} {src}'
 logger = logging.getLogger(__name__)
 
 
-def taskCompile(cmd, journals, limit):
+def taskCompile(cmd, journals):
     logger.debug('Starting subproc for task compiling: %r', cmd)
 
     def preexec():
@@ -58,7 +61,7 @@ def taskCompile(cmd, journals, limit):
         cmd,
         cwd=SANDBOX_PATH,
         preexec_fn=preexec,
-        pipe_stderr=(journals[1], limit),
+        pipe_stderr=(journals[1], COMPILE_OUT_LIM),
     )
     logger.debug('Ending subproc for task compiling after %.0fms', (time.perf_counter() - t) * 1000)
 
@@ -69,7 +72,7 @@ def taskCompile(cmd, journals, limit):
     for line in buf.readlines():
         logger.debug('COMPILE >>> %s', line[:-1])
 
-    return subp, ole
+    return subp, ole[0] or ole[1]
 
 def taskCompileChecker(problem, checker_out, checker_exec):
     with open(checker_out, 'w') as f:
@@ -108,26 +111,27 @@ def judgeSingleSubtask(task, paths, checker_args):
     cmd_task = shlex.split(cmd_task_str)
 
     f_in = open(infile, 'r')
-    f_out_user = open(TMP_USEROUT_PATH, 'w+')
+    # No, you really can't trust the user's output
+    f_out_user = open(TMP_USEROUT_PATH, 'w+b')
 
     time_task = time.perf_counter()
 
     logger.debug('Starting subproc for subtask: %r', cmd_task)
 
-    subp_task = subprocess.run(
+    subp_task, (is_stdout_ole, _) = pipes.run_with_pipes(
         cmd_task,
         cwd=path.dirname(__file__),
         stdin=f_in,
-        stdout=f_out_user,
+        pipe_stdout=(f_out_user, USER_OUTPUT_LIM),
         stderr=subprocess.DEVNULL,
         pass_fds=(log_file_fd,)
     )
 
-    logger.debug('Ending subproc for subtask after %.0fms', time.perf_counter() - time_task)
+    logger.debug('Ending subproc for subtask after %.0fms', (time.perf_counter() - time_task) * 1000)
 
     process_failed = (subp_task.returncode != 0)
     if process_failed:
-        logger.debug('Subtask {} with return code %d'.format(color('failed', fg='yellow'), subp_task.returncode))
+        logger.debug('Subtask {} with return code %d'.format(color('failed', fg='yellow')), subp_task.returncode)
 
     f_in.close()
     f_out_user.close()
@@ -169,15 +173,21 @@ def judgeSingleSubtask(task, paths, checker_args):
     time_used = int(log_dict['time'])
     mem_used = int(log_dict['cgroup_memory_max_usage'])
 
+    # TODO: RF
+    if is_stdout_ole:
+        # looks like nsjail ignores SIGPIPE and let children continue to run
+        # until TLE, because of the pid-namespace :(
+        print(color('===== OLE =====', style='negative'))
+        return HojVerdict.OLE, log_dict
+
     # check if the process ends with error
-    # TODO: RF, OLE
     verdict = None
 
     if log_dict['cgroup_memory_failcnt'] != '0':
         verdict = HojVerdict.MLE
     elif (log_dict['exit_normally'] == 'false' and time_used >= task.time_limit):
         verdict =  HojVerdict.TLE
-    elif subp_task.returncode != 0:
+    elif process_failed:
         verdict =  HojVerdict.RE
 
     if verdict is not None:
@@ -282,16 +292,15 @@ def judgeSubmission(submission, judge_desc):
         output=PROG_EXEC_PATH
     )
 
-    comp_loglim = 8192
     with journals.start(None, 'COMPILE'):
-        subp_compile, is_ole = taskCompile(shlex.split(cmd_compile), journals, comp_loglim)
+        subp_compile, is_ole = taskCompile(shlex.split(cmd_compile), journals)
 
     _comp_stderr = journals[1].dump('COMPILE')
     ansi_escape = re.compile(r'(\x9B|\x1B\[)[0-?]*[ -/]*[@-~]')
     log_msg = ansi_escape.sub('', _comp_stderr)
 
     if is_ole:
-        log_msg += f'@<< Truncated at {comp_loglim} chars. The message above may be incomplete. >>'
+        log_msg += f'@<< Truncated at {COMPILE_OUT_LIM} chars. The message above may be incomplete. >>'
 
     if subp_compile.returncode == 0:
         logger.debug('Compile task succeeds')

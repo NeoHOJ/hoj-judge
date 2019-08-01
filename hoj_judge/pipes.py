@@ -229,7 +229,7 @@ class _Popen(Popen):
                 break
             elif szr == 0:
                 break
-        # os.close(fd)
+            ntotal += szr
 
         return ntotal, ole
 
@@ -248,7 +248,7 @@ class _Popen(Popen):
 
         if sz != 0 and not buf:  # EOF
             return 0
-        if sz == 0 and os.read(fd, 1) != 0:
+        if sz == 0 and os.read(fd, 1):
             # read returning, meaning not EOF yet,
             # which means exceeding the max_size limit
             return -1
