@@ -10,7 +10,6 @@ import shlex
 import sys
 import time
 
-
 from peewee import *
 from colors import color
 
@@ -73,6 +72,7 @@ def taskCompile(cmd, journals):
         logger.debug('COMPILE >>> %s', line[:-1])
 
     return subp, ole[0] or ole[1]
+
 
 def taskCompileChecker(problem, checker_out, checker_exec):
     with open(checker_out, 'w') as f:
@@ -172,8 +172,12 @@ def judgeSingleSubtask(task, paths, checker_args):
 
     time_used = int(log_dict['time'])
     mem_used = int(log_dict['cgroup_memory_max_usage'])
+    is_seccomp_violating = (log_dict.get('seccomp_violation', '') != 'false')
 
-    # TODO: RF
+    if is_seccomp_violating:
+        print(color('===== RF =====', fg='yellow', style='negative'))
+        return HojVerdict.RF, log_dict
+
     if is_stdout_ole:
         # looks like nsjail ignores SIGPIPE and let children continue to run
         # until TLE, because of the pid-namespace :(
@@ -186,9 +190,9 @@ def judgeSingleSubtask(task, paths, checker_args):
     if log_dict['cgroup_memory_failcnt'] != '0':
         verdict = HojVerdict.MLE
     elif (log_dict['exit_normally'] == 'false' and time_used >= task.time_limit):
-        verdict =  HojVerdict.TLE
+        verdict = HojVerdict.TLE
     elif process_failed:
-        verdict =  HojVerdict.RE
+        verdict = HojVerdict.RE
 
     if verdict is not None:
         print(color('===== {:3} ====='.format(verdict.name), fg='magenta', style='negative') +
@@ -251,6 +255,7 @@ def judgeSingleSubtask(task, paths, checker_args):
     print(color('===== AC  =====', fg='green', style='negative'))
     return HojVerdict(resp.verdict), log_dict
 
+
 def judgeSubmission(submission, judge_desc):
     problem = submission.problem
     logger.debug('Sandbox path is set to {}'.format(SANDBOX_PATH))
@@ -277,7 +282,6 @@ def judgeSubmission(submission, judge_desc):
         nwrt = f.write(submission.submission_code)
     logger.debug('Written %d byte(s) to %s', nwrt, path_src)
 
-    # prepare piping threads
     logfile_stdout = open(LOG_STDOUT_PATH, 'w+')
     logfile_stderr = open(LOG_STDERR_PATH, 'w+')
 
