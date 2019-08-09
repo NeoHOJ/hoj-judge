@@ -7,7 +7,9 @@ import re
 import resource
 import subprocess
 import shlex
+import shutil
 import sys
+import tempfile
 import time
 
 from peewee import *
@@ -29,6 +31,7 @@ TMP_COMPLOG_PATH = '/run/shm/compile.log'
 LOG_STDOUT_PATH = '/tmp/judge.stdout.log'
 LOG_STDERR_PATH = '/tmp/judge.stderr.log'
 PROG_EXEC_PATH = './program'
+PROG_INTER_PATH = './interactor'
 
 SOURCE_FILENAME = 'test-file.cpp'
 COMPILE_MEM_LIM = 128 * 1024 * 1024
@@ -140,7 +143,7 @@ def judgeSingleSubtask(task, paths, checker_args):
 
     # get size of the log
     # TODO: interrupt if the log file is empty. the worker probably fails to start up
-    log_file.seek(0, 2)  # SEEK_END = 2
+    log_file.seek(0, os.SEEK_END)
     sz = log_file.tell()
 
     log_file.seek(0)
@@ -274,27 +277,46 @@ def judgeSubmission(submission, judge_desc):
         logger.error(color('Failed to collect test data, refusing to continue', fg='red', style='bold'))
         return None, -1, None
 
+    # prepare logging facilities
+    logfile_stdout = open(LOG_STDOUT_PATH, 'w+')
+    logfile_stderr = open(LOG_STDERR_PATH, 'w+')
+
+    journals = pipes.Journals(logfile_stdout, logfile_stderr)
+
     logger.info(color('Writing code to disk...', style='bold'))
 
-    path_src = path.join(SANDBOX_PATH, SOURCE_FILENAME)
+    tmpdir = tempfile.mkdtemp()
+    print('tmpdir', tmpdir)
+
+    path_src = path.join(tmpdir, SOURCE_FILENAME)
+    path_prog_out = path.join(SANDBOX_PATH, PROG_EXEC_PATH)
 
     with open(path_src, 'w') as f:
         nwrt = f.write(submission.submission_code)
     logger.debug('Written %d byte(s) to %s', nwrt, path_src)
 
-    logfile_stdout = open(LOG_STDOUT_PATH, 'w+')
-    logfile_stderr = open(LOG_STDERR_PATH, 'w+')
-
     logger.info(color('Compiling...', style='bold'))
 
+    # ad-hoc :(
+    is_interactive = (problem.problem in [23])
+    if is_interactive:
+        path_supp_dir = path.join(TESTDATA_PATH, '{}i'.format(problem.problem))
+        copying_files = [
+            '{}.h'.format(problem.problem),
+            'user.c']
 
-    journals = pipes.Journals(logfile_stdout, logfile_stderr)
+        supp_hdr, supp_user = [ shutil.copy(path.join(path_supp_dir, x), tmpdir) for x in copying_files ]
 
-    # with 1:
-    cmd_compile = cmd_compile_tpl.format(
-        src=shlex.quote(SOURCE_FILENAME),
-        output=PROG_EXEC_PATH
-    )
+        srcs = ' '.join([shlex.quote(x) for x in (path_src, supp_user)])
+        cmd_compile = cmd_compile_tpl.format(
+            src=srcs,
+            output=shlex.quote(path_prog_out),
+        )
+    else:
+        cmd_compile = cmd_compile_tpl.format(
+            src=shlex.quote(path_src),
+            output=shlex.quote(path_prog_out),
+        )
 
     with journals.start(None, 'COMPILE'):
         subp_compile, is_ole = taskCompile(shlex.split(cmd_compile), journals)
@@ -302,6 +324,9 @@ def judgeSubmission(submission, judge_desc):
     _comp_stderr = journals[1].dump('COMPILE')
     ansi_escape = re.compile(r'(\x9B|\x1B\[)[0-?]*[ -/]*[@-~]')
     log_msg = ansi_escape.sub('', _comp_stderr)
+
+    # clean-up compiling tmpdir
+    # shutil.rmtree(tmpdir)
 
     if is_ole:
         log_msg += f'@<< Truncated at {COMPILE_OUT_LIM} chars. The message above may be incomplete. >>'
@@ -317,7 +342,25 @@ def judgeSubmission(submission, judge_desc):
         # TODO: wiring out the error message (how?)
         return [[HojVerdict.CE, 0, 0] for _ in all_tasks], 0, log_msg
 
-    if problem.problem_special:
+
+    if is_interactive:
+        logger.debug('Interactive judge is on')
+        print(color('Interactive judge. Compiling interactor...', style='bold'))
+
+        path_inter_out = path.join(SANDBOX_PATH, PROG_INTER_PATH)
+        with journals.start(None, 'COMPILE_INTER'):
+            cmd_compile_2 = cmd_compile_tpl.format(
+                src=path.abspath(path.join(path_supp_dir, 'interactor.c')),
+                output=shlex.quote(path_inter_out),
+            )
+            subp_compile_2, _ = taskCompile(shlex.split(cmd_compile_2), journals)
+
+        if subp_compile_2.returncode != 0:
+            print(color('Failed to compile interactor', fg='red', style='bold'))
+            return [[HojVerdict.OTHER, 0, 0] for _ in all_tasks], 0, log_msg
+        # FIXME
+        checker_args = [path.join(__package__, '..', 'utils', 'interactive.py')]
+    elif problem.problem_special:
         logger.debug('Special judge is on')
         print(color('Special judge. Compiling checker...', style='bold'))
 
